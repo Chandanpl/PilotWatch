@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from routers.dataset import router as dataset_router
 
 from database.database import engine, SessionLocal
 from database import models, crud
@@ -43,6 +44,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(loco.router)
 app.include_router(checkpost.router)
+app.include_router(dataset_router)
 
 
 @app.get("/")
