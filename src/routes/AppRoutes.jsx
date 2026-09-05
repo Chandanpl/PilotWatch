@@ -2,17 +2,15 @@ import { Routes, Route } from 'react-router-dom'
 import Login from '../pages/Login.jsx'
 import LocoDashboard from '../pages/LocoDashboard.jsx'
 import GatemanDashboard from '../pages/GatemanDashboard.jsx'
-import DatasetTesting from "../pages/DatasetTesting"
-<Route
-  path="/dataset-testing"
-  element={<DatasetTesting />}
-/>
+import DatasetTesting from '../pages/DatasetTesting.jsx'
+
 function AppRoutes() {
   return (
     <Routes>
       <Route path="/" element={<Login />} />
       <Route path="/loco-dashboard" element={<LocoDashboard />} />
       <Route path="/gate-dashboard" element={<GatemanDashboard />} />
+      <Route path="/dataset-testing" element={<DatasetTesting />} />
     </Routes>
   )
 }
