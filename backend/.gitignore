@@ -1,6 +1,52 @@
-# Google Drive OAuth credentials
-credentials/
-
+# =========================
 # Python
+# =========================
+
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+
+# =========================
+# AI Models
+# =========================
+
+ai/models/*.pt
+ai/models/*.onnx
+
+
+# =========================
+# AI Input Data
+# =========================
+
+ai/input/videos/
+ai/input/images/
+
+
+# =========================
+# AI Output
+# =========================
+
+ai/output/
+
+
+# =========================
+# Temporary AI files
+# =========================
+
+*.mp4
+*.webm
+*.avi
+*.mov
+*.mkv
+*.jpg
+*.jpeg
+*.png
+
+
+# =========================
+# Google Drive credentials
+# =========================
+
+backend/credentials/

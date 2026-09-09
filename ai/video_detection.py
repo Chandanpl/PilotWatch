@@ -9,7 +9,7 @@ from pathlib import Path
 
 MODEL_PATH = Path(__file__).parent / "models" / "yolo11n.pt"
 
-INPUT_VIDEO = Path(__file__).parent / "input" / "videos" / "test.mp4"
+INPUT_VIDEO = Path(__file__).parent / "input" / "videos" / "railway_test.mp4"
 
 OUTPUT_DIR = Path(__file__).parent / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
