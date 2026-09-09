@@ -1,56 +1,105 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pathlib import Path
-import zipfile
-import shutil
-import uuid
+import tempfile
+import os
+
+from google_drive import get_drive_service
+from googleapiclient.http import MediaFileUpload
+
 
 router = APIRouter(
     prefix="/dataset",
     tags=["Dataset"]
 )
 
-# Project root
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Dataset directory
-DATASET_DIR = PROJECT_ROOT / "ai" / "dataset"
-
-# Temporary uploads
-UPLOAD_DIR = PROJECT_ROOT / "ai" / "dataset_uploads"
-
-DATASET_DIR.mkdir(parents=True, exist_ok=True)
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Google Drive folder IDs created earlier
+DRIVE_FOLDERS = {
+    "videos": "1pdqmOZn0b7rnYPiYph2fdDgNNjVRcXFd",
+    "images": "1SrG4mzrpAWbful2ngWTKRk-q9nB2m0NM",
+    "datasets": "1iu-o14jEgaj9EQ49Lm6aqbqaQi8FkJS9",
+    "other": "1WD8r-9f7IgSB6ZkGflYqEy7JvePdBor9",
+}
 
 
-ALLOWED_EXTENSIONS = {".zip"}
+IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".bmp",
+    ".webp",
+    ".gif"
+}
+
+VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".mkv",
+    ".wmv",
+    ".webm",
+    ".mpeg",
+    ".mpg"
+}
+
+DATASET_EXTENSIONS = {
+    ".zip",
+    ".tar",
+    ".gz",
+    ".7z",
+    ".rar"
+}
 
 
-def count_files(directory: Path, extensions=None):
-    if not directory.exists():
-        return 0
+def get_drive_folder(extension: str) -> tuple[str, str]:
 
-    if extensions:
-        return sum(
-            1
-            for file in directory.rglob("*")
-            if file.is_file() and file.suffix.lower() in extensions
-        )
+    extension = extension.lower()
 
-    return sum(
-        1
-        for file in directory.rglob("*")
-        if file.is_file()
+    if extension in IMAGE_EXTENSIONS:
+        return "images", DRIVE_FOLDERS["images"]
+
+    if extension in VIDEO_EXTENSIONS:
+        return "videos", DRIVE_FOLDERS["videos"]
+
+    if extension in DATASET_EXTENSIONS:
+        return "datasets", DRIVE_FOLDERS["datasets"]
+
+    return "other", DRIVE_FOLDERS["other"]
+
+
+def get_mime_type(filename: str) -> str:
+
+    extension = Path(filename).suffix.lower()
+
+    mime_types = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".bmp": "image/bmp",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+
+        ".mp4": "video/mp4",
+        ".avi": "video/x-msvideo",
+        ".mov": "video/quicktime",
+        ".mkv": "video/x-matroska",
+        ".webm": "video/webm",
+
+        ".pdf": "application/pdf",
+        ".json": "application/json",
+        ".txt": "text/plain",
+        ".csv": "text/csv",
+        ".xml": "application/xml",
+
+        ".zip": "application/zip",
+        ".rar": "application/vnd.rar",
+        ".7z": "application/x-7z-compressed",
+    }
+
+    return mime_types.get(
+        extension,
+        "application/octet-stream"
     )
-
-
-def find_yaml_file(directory: Path):
-    for file in directory.rglob("*.yaml"):
-        return file
-
-    for file in directory.rglob("*.yml"):
-        return file
-
-    return None
 
 
 @router.post("/upload")
@@ -59,132 +108,115 @@ async def upload_dataset(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(
             status_code=400,
-            detail="No dataset file selected"
+            detail="No file selected"
         )
 
-    extension = Path(file.filename).suffix.lower()
+    filename = Path(file.filename).name
 
-    if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail="Only ZIP dataset files are supported"
-        )
+    extension = Path(filename).suffix.lower()
 
-    unique_name = f"{uuid.uuid4()}_{file.filename}"
+    folder_type, folder_id = get_drive_folder(extension)
 
-    zip_path = UPLOAD_DIR / unique_name
+    temp_path = None
 
     try:
 
-        # Save uploaded ZIP
-        with open(zip_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # -------------------------------------------------
+        # 1. Save file temporarily
+        # -------------------------------------------------
 
-        # Clear previous dataset
-        if DATASET_DIR.exists():
-            for item in DATASET_DIR.iterdir():
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=extension
+        ) as temp_file:
 
-        # Extract ZIP
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            temp_path = temp_file.name
 
-            # Security check against path traversal
-            for member in zip_ref.infolist():
+            while True:
 
-                member_path = DATASET_DIR / member.filename
+                chunk = await file.read(1024 * 1024)
 
-                if not member_path.resolve().is_relative_to(
-                    DATASET_DIR.resolve()
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Unsafe ZIP file detected"
-                    )
+                if not chunk:
+                    break
 
-            zip_ref.extractall(DATASET_DIR)
+                temp_file.write(chunk)
 
-        # Remove temporary ZIP
-        zip_path.unlink(missing_ok=True)
+        # -------------------------------------------------
+        # 2. Connect to Google Drive
+        # -------------------------------------------------
 
-        # Count files
-        image_extensions = {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".bmp",
-            ".webp"
+        service = get_drive_service()
+
+        # -------------------------------------------------
+        # 3. Upload to correct PilotWatch folder
+        # -------------------------------------------------
+
+        metadata = {
+            "name": filename,
+            "parents": [folder_id]
         }
 
-        label_extensions = {
-            ".txt"
-        }
-
-        image_count = count_files(
-            DATASET_DIR,
-            image_extensions
+        media = MediaFileUpload(
+            temp_path,
+            mimetype=get_mime_type(filename),
+            resumable=True
         )
 
-        label_count = count_files(
-            DATASET_DIR,
-            label_extensions
-        )
+        uploaded_file = service.files().create(
+            body=metadata,
+            media_body=media,
+            fields="id,name,size,webViewLink,mimeType"
+        ).execute()
+        media._fd.close()
+        # -------------------------------------------------
+        # 4. Remove temporary local file
+        # -------------------------------------------------
 
-        yaml_file = find_yaml_file(DATASET_DIR)
-
-        # Detect common YOLO folders
-        train_exists = (
-            (DATASET_DIR / "images" / "train").exists()
-            or (DATASET_DIR / "train" / "images").exists()
-        )
-
-        val_exists = (
-            (DATASET_DIR / "images" / "val").exists()
-            or (DATASET_DIR / "valid" / "images").exists()
-            or (DATASET_DIR / "val" / "images").exists()
-        )
-
-        test_exists = (
-            (DATASET_DIR / "images" / "test").exists()
-            or (DATASET_DIR / "test" / "images").exists()
-        )
-
-        dataset_ready = (
-            image_count > 0
-            and label_count > 0
-            and yaml_file is not None
-        )
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except PermissionError:
+                pass
+        # -------------------------------------------------
+        # 5. Return result
+        # -------------------------------------------------
 
         return {
             "success": True,
-            "message": "Dataset uploaded successfully",
-            "filename": file.filename,
-            "dataset_path": str(DATASET_DIR),
-            "images": image_count,
-            "labels": label_count,
-            "data_yaml": yaml_file.name if yaml_file else None,
-            "train_available": train_exists,
-            "validation_available": val_exists,
-            "test_available": test_exists,
-            "ready_for_training": dataset_ready
+            "message": "File uploaded successfully to Google Drive",
+
+            "filename": uploaded_file.get(
+                "name",
+                filename
+            ),
+
+            "file_id": uploaded_file.get("id"),
+
+            "file_type": folder_type,
+
+            "mime_type": uploaded_file.get(
+                "mimeType",
+                get_mime_type(filename)
+            ),
+
+            "size": uploaded_file.get("size"),
+
+            "drive_link": uploaded_file.get(
+                "webViewLink"
+            )
         }
-
-    except zipfile.BadZipFile:
-
-        zip_path.unlink(missing_ok=True)
-
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or corrupted ZIP file"
-        )
 
     except Exception as e:
 
-        zip_path.unlink(missing_ok=True)
+        # Always remove temporary file
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
 
         raise HTTPException(
             status_code=500,
-            detail=f"Dataset processing failed: {str(e)}"
+            detail=f"Google Drive upload failed: {str(e)}"
         )
+
+    finally:
+
+        await file.close()

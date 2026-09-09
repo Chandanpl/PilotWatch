@@ -1,0 +1,6 @@
+# Google Drive OAuth credentials
+credentials/
+
+# Python
+__pycache__/
+*.pyc
