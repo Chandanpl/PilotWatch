@@ -1,271 +1,187 @@
 import cv2
-from ultralytics import YOLO
+import math
 from pathlib import Path
-from collections import defaultdict
+from ultralytics import YOLO
 
-# =========================
-# PATHS
-# =========================
-
-BASE_DIR = Path(__file__).parent
-
+BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "yolo11n.pt"
-INPUT_VIDEO = BASE_DIR / "input" / "videos" / "railway_test.mp4"
 
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_VIDEO = OUTPUT_DIR / "motion_analysis.mp4"
+
+def calculate_direction(previous_position, current_position):
+    """
+    Calculate movement direction based on object center positions.
+    """
+
+    if previous_position is None:
+        return "UNKNOWN"
+
+    previous_x, previous_y = previous_position
+    current_x, current_y = current_position
+
+    dx = current_x - previous_x
+    dy = current_y - previous_y
+
+    distance = math.sqrt(dx ** 2 + dy ** 2)
+
+    # Very small movement = stationary
+    if distance < 2:
+        return "STATIONARY"
+
+    # Horizontal movement
+    if abs(dx) > abs(dy):
+        if dx > 0:
+            return "RIGHT"
+        else:
+            return "LEFT"
+
+    # Vertical movement
+    if dy > 0:
+        return "TOWARDS"
+    else:
+        return "AWAY"
 
 
-# =========================
-# SETTINGS
-# =========================
+def motion_analysis(input_video, output_video=None):
 
-# Number of previous positions to remember
-HISTORY_LENGTH = 20
+    input_video = Path(input_video)
 
-# Minimum movement in pixels before deciding direction
-MOVEMENT_THRESHOLD = 5
+    if output_video is None:
+        output_video = OUTPUT_DIR / "motion_analysis.mp4"
+    else:
+        output_video = Path(output_video)
 
+    print("Loading YOLO model...")
+    model = YOLO(str(MODEL_PATH))
+    print("YOLO model loaded successfully!")
+    print("Starting motion analysis...\n")
 
-# =========================
-# LOAD MODEL
-# =========================
+    cap = cv2.VideoCapture(str(input_video))
 
-print("Loading YOLO model...")
+    if not cap.isOpened():
+        raise RuntimeError(f"Could not open video: {input_video}")
 
-model = YOLO(str(MODEL_PATH))
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-print("YOLO model loaded successfully!")
-print("Starting motion analysis...\n")
+    if fps <= 0:
+        fps = 25
 
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-# =========================
-# OPEN VIDEO
-# =========================
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-cap = cv2.VideoCapture(str(INPUT_VIDEO))
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
-if not cap.isOpened():
-    raise RuntimeError(f"Could not open video: {INPUT_VIDEO}")
-
-
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-if fps <= 0:
-    fps = 25
-
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-
-# =========================
-# OUTPUT VIDEO
-# =========================
-
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-writer = cv2.VideoWriter(
-    str(OUTPUT_VIDEO),
-    fourcc,
-    fps,
-    (width, height)
-)
-
-
-# =========================
-# POSITION HISTORY
-# =========================
-
-position_history = defaultdict(list)
-
-frame_number = 0
-
-
-# =========================
-# TRACKING + MOTION LOOP
-# =========================
-
-while True:
-
-    success, frame = cap.read()
-
-    if not success:
-        break
-
-    frame_number += 1
-
-    results = model.track(
-        frame,
-        persist=True,
-        tracker="bytetrack.yaml",
-        verbose=False
+    writer = cv2.VideoWriter(
+        str(output_video),
+        fourcc,
+        fps,
+        (width, height)
     )
 
-    result = results[0]
+    previous_positions = {}
 
-    annotated_frame = frame.copy()
+    frame_number = 0
 
+    motion_counts = {
+        "LEFT": 0,
+        "RIGHT": 0,
+        "TOWARDS": 0,
+        "AWAY": 0,
+        "STATIONARY": 0,
+        "UNKNOWN": 0
+    }
 
-    # =========================
-    # PROCESS TRACKED OBJECTS
-    # =========================
+    while True:
 
-    if result.boxes is not None and result.boxes.id is not None:
+        success, frame = cap.read()
 
-        boxes = result.boxes.xyxy.cpu().tolist()
-        track_ids = result.boxes.id.int().cpu().tolist()
-        classes = result.boxes.cls.int().cpu().tolist()
-        confidences = result.boxes.conf.cpu().tolist()
+        if not success:
+            break
 
-        for box, track_id, class_id, confidence in zip(
-            boxes,
-            track_ids,
-            classes,
-            confidences
-        ):
+        frame_number += 1
 
-            x1, y1, x2, y2 = map(int, box)
+        results = model.track(
+            frame,
+            persist=True,
+            tracker="bytetrack.yaml",
+            verbose=False
+        )
 
-            # Center of bounding box
-            center_x = int((x1 + x2) / 2)
-            center_y = int((y1 + y2) / 2)
+        result = results[0]
 
-            # Save position
-            history = position_history[track_id]
+        annotated_frame = result.plot()
 
-            history.append((center_x, center_y))
+        if result.boxes is not None and result.boxes.id is not None:
 
-            # Keep only recent positions
-            if len(history) > HISTORY_LENGTH:
-                history.pop(0)
+            track_ids = result.boxes.id.int().cpu().tolist()
+            boxes = result.boxes.xyxy.cpu().tolist()
 
+            for track_id, box in zip(track_ids, boxes):
 
-            # =========================
-            # DIRECTION
-            # =========================
+                x1, y1, x2, y2 = box
 
-            direction = "STATIONARY"
+                center_x = int((x1 + x2) / 2)
+                center_y = int((y1 + y2) / 2)
 
-            if len(history) >= 2:
+                current_position = (center_x, center_y)
 
-                old_x, old_y = history[0]
-                new_x, new_y = history[-1]
+                previous_position = previous_positions.get(track_id)
 
-                dx = new_x - old_x
-                dy = new_y - old_y
+                direction = calculate_direction(
+                    previous_position,
+                    current_position
+                )
 
-                if abs(dx) < MOVEMENT_THRESHOLD and abs(dy) < MOVEMENT_THRESHOLD:
-                    direction = "STATIONARY"
+                motion_counts[direction] += 1
 
-                elif abs(dx) > abs(dy):
+                previous_positions[track_id] = current_position
 
-                    if dx > 0:
-                        direction = "RIGHT"
-                    else:
-                        direction = "LEFT"
-
-                else:
-
-                    if dy > 0:
-                        direction = "DOWN"
-                    else:
-                        direction = "UP"
-
-
-            # =========================
-            # DRAW TRACKING BOX
-            # =========================
-
-            cv2.rectangle(
-                annotated_frame,
-                (x1, y1),
-                (x2, y2),
-                (0, 255, 0),
-                2
-            )
-
-
-            # Draw center point
-
-            cv2.circle(
-                annotated_frame,
-                (center_x, center_y),
-                5,
-                (0, 0, 255),
-                -1
-            )
-
-
-            # =========================
-            # DRAW MOTION TRAIL
-            # =========================
-
-            for i in range(1, len(history)):
-
-                cv2.line(
+                # Display direction
+                cv2.putText(
                     annotated_frame,
-                    history[i - 1],
-                    history[i],
-                    (255, 0, 0),
+                    f"ID {track_id}: {direction}",
+                    (int(x1), int(y1) - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 0),
                     2
                 )
 
+        writer.write(annotated_frame)
 
-            # =========================
-            # OBJECT LABEL
-            # =========================
-
-            label = f"ID {track_id} | {direction}"
-
-            cv2.putText(
-                annotated_frame,
-                label,
-                (x1, max(y1 - 10, 20)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2
+        if frame_number % 100 == 0:
+            print(
+                f"Processing frame "
+                f"{frame_number}/{total_frames}..."
             )
 
+    cap.release()
+    writer.release()
 
-    # =========================
-    # DISPLAY
-    # =========================
+    print("\nMotion analysis completed!")
 
-    cv2.putText(
-        annotated_frame,
-        f"Frame: {frame_number}",
-        (20, 35),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2
-    )
+    print(f"Frames processed: {frame_number}")
 
-    writer.write(annotated_frame)
+    print("\nMotion counts:")
 
-    cv2.imshow(
-        "PilotWatch - Motion Analysis",
-        annotated_frame
-    )
+    for direction, count in motion_counts.items():
+        print(f"{direction}: {count}")
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+    print(f"\nOutput video: {output_video}")
+
+    return {
+        "frames_processed": frame_number,
+        "motion_counts": motion_counts,
+        "output_video": str(output_video)
+    }
 
 
-# =========================
-# CLEANUP
-# =========================
+if __name__ == "__main__":
 
-cap.release()
-writer.release()
-cv2.destroyAllWindows()
+    INPUT_VIDEO = BASE_DIR / "input" / "videos" / "railway_test.mp4"
 
-
-print("\nMotion analysis completed!")
-
-print(f"Frames processed: {frame_number}")
-
-print(f"Output video: {OUTPUT_VIDEO}")
+    result = motion_analysis(INPUT_VIDEO)

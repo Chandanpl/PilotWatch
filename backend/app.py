@@ -2,10 +2,18 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routers.dataset import router as dataset_router
+from routers.ai import router as ai_router
 
 from database.database import engine, SessionLocal
 from database import models, crud
 from routers import auth, loco, checkpost
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -45,6 +53,7 @@ app.include_router(auth.router)
 app.include_router(loco.router)
 app.include_router(checkpost.router)
 app.include_router(dataset_router)
+app.include_router(ai_router)
 
 
 @app.get("/")

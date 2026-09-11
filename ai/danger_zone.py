@@ -1,359 +1,282 @@
 import cv2
-from ultralytics import YOLO
 from pathlib import Path
-from collections import defaultdict
-import math
+from ultralytics import YOLO
 
-# =========================
-# PATHS
-# =========================
-
-BASE_DIR = Path(__file__).parent
-
+BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "yolo11n.pt"
-INPUT_VIDEO = BASE_DIR / "input" / "videos" / "railway_test.mp4"
 
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_VIDEO = OUTPUT_DIR / "danger_zone.mp4"
 
+# --------------------------------------------------
+# Check whether a point is inside the danger zone
+# --------------------------------------------------
 
-# =========================
-# DANGER ZONE
-# =========================
-# These points define the railway danger zone.
-#
-# IMPORTANT:
-# Change these coordinates later according to
-# the actual camera view.
+def is_inside_danger_zone(point, polygon):
 
-DANGER_ZONE = [
-    (150, 400),
-    (1130, 400),
-    (1270, 720),
-    (50, 720)
-]
-
-
-# =========================
-# SETTINGS
-# =========================
-
-HISTORY_LENGTH = 10
-MOVEMENT_THRESHOLD = 5
-
-
-# =========================
-# LOAD MODEL
-# =========================
-
-print("Loading YOLO model...")
-
-model = YOLO(str(MODEL_PATH))
-
-print("YOLO model loaded successfully!")
-print("Starting danger-zone analysis...\n")
-
-
-# =========================
-# OPEN VIDEO
-# =========================
-
-cap = cv2.VideoCapture(str(INPUT_VIDEO))
-
-if not cap.isOpened():
-    raise RuntimeError(f"Could not open video: {INPUT_VIDEO}")
-
-
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-if fps <= 0:
-    fps = 25
-
-width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-
-# =========================
-# OUTPUT
-# =========================
-
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-writer = cv2.VideoWriter(
-    str(OUTPUT_VIDEO),
-    fourcc,
-    fps,
-    (width, height)
-)
-
-
-# =========================
-# POSITION HISTORY
-# =========================
-
-position_history = defaultdict(list)
-
-frame_number = 0
-
-
-# =========================
-# PROCESS VIDEO
-# =========================
-
-while True:
-
-    success, frame = cap.read()
-
-    if not success:
-        break
-
-    frame_number += 1
-
-    results = model.track(
-        frame,
-        persist=True,
-        tracker="bytetrack.yaml",
-        verbose=False
+    result = cv2.pointPolygonTest(
+        polygon,
+        point,
+        False
     )
 
-    result = results[0]
-
-    annotated_frame = frame.copy()
+    return result >= 0
 
 
-    # =========================
-    # DRAW DANGER ZONE
-    # =========================
+# --------------------------------------------------
+# Process video
+# --------------------------------------------------
 
-    zone_points = DANGER_ZONE
+def detect_danger_zone(input_video, output_video=None):
 
-    cv2.polylines(
-        annotated_frame,
-        [__import__("numpy").array(zone_points)],
-        True,
-        (0, 0, 255),
-        3
+    input_video = Path(input_video)
+
+    if output_video is None:
+        output_video = OUTPUT_DIR / "danger_zone.mp4"
+    else:
+        output_video = Path(output_video)
+
+    print("Loading YOLO model...")
+    model = YOLO(str(MODEL_PATH))
+    print("YOLO model loaded successfully!")
+    print("Starting danger zone detection...\n")
+
+    cap = cv2.VideoCapture(str(input_video))
+
+    if not cap.isOpened():
+        raise RuntimeError(
+            f"Could not open video: {input_video}"
+        )
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    if fps <= 0:
+        fps = 25
+
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    total_frames = int(
+        cap.get(cv2.CAP_PROP_FRAME_COUNT)
     )
 
-    # Transparent zone overlay
-
-    overlay = annotated_frame.copy()
-
-    cv2.fillPoly(
-        overlay,
-        [__import__("numpy").array(zone_points)],
-        (0, 0, 255)
+    fourcc = cv2.VideoWriter_fourcc(
+        *"mp4v"
     )
 
-    annotated_frame = cv2.addWeighted(
-        overlay,
-        0.15,
-        annotated_frame,
-        0.85,
-        0
+    writer = cv2.VideoWriter(
+        str(output_video),
+        fourcc,
+        fps,
+        (width, height)
     )
 
+    # --------------------------------------------------
+    # Temporary danger zone
+    #
+    # This is deliberately a simple zone.
+    # We will calibrate it later for the real camera.
+    # --------------------------------------------------
 
-    # =========================
-    # PROCESS OBJECTS
-    # =========================
+    danger_zone = [
+        (int(width * 0.25), int(height * 0.55)),
+        (int(width * 0.75), int(height * 0.55)),
+        (int(width * 0.90), int(height * 0.95)),
+        (int(width * 0.10), int(height * 0.95))
+    ]
 
-    if result.boxes is not None and result.boxes.id is not None:
+    polygon = __import__("numpy").array(
+        danger_zone,
+        dtype="int32"
+    )
 
-        boxes = result.boxes.xyxy.cpu().tolist()
+    frame_number = 0
 
-        track_ids = result.boxes.id.int().cpu().tolist()
+    danger_events = 0
+    safe_events = 0
 
-        classes = result.boxes.cls.int().cpu().tolist()
+    while True:
 
-        for box, track_id, class_id in zip(
-            boxes,
-            track_ids,
-            classes
+        success, frame = cap.read()
+
+        if not success:
+            break
+
+        frame_number += 1
+
+        # ----------------------------------------------
+        # YOLO + ByteTrack
+        # ----------------------------------------------
+
+        results = model.track(
+            frame,
+            persist=True,
+            tracker="bytetrack.yaml",
+            verbose=False
+        )
+
+        result = results[0]
+
+        annotated_frame = result.plot()
+
+        # ----------------------------------------------
+        # Draw danger zone
+        # ----------------------------------------------
+
+        cv2.polylines(
+            annotated_frame,
+            [polygon],
+            True,
+            (0, 0, 255),
+            3
+        )
+
+        cv2.putText(
+            annotated_frame,
+            "DANGER ZONE",
+            (
+                int(width * 0.40),
+                int(height * 0.60)
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255),
+            2
+        )
+
+        # ----------------------------------------------
+        # Check detected objects
+        # ----------------------------------------------
+
+        if (
+            result.boxes is not None
+            and result.boxes.id is not None
         ):
 
-            x1, y1, x2, y2 = map(int, box)
+            track_ids = (
+                result.boxes.id
+                .int()
+                .cpu()
+                .tolist()
+            )
 
-            center_x = int((x1 + x2) / 2)
-            center_y = int((y1 + y2) / 2)
+            boxes = (
+                result.boxes.xyxy
+                .cpu()
+                .tolist()
+            )
 
-            # =========================
-            # POSITION HISTORY
-            # =========================
+            for track_id, box in zip(
+                track_ids,
+                boxes
+            ):
 
-            history = position_history[track_id]
+                x1, y1, x2, y2 = box
 
-            history.append((center_x, center_y))
+                # Use bottom-center of bounding box
+                # as the object's ground/contact point.
 
-            if len(history) > HISTORY_LENGTH:
-                history.pop(0)
+                center_x = int(
+                    (x1 + x2) / 2
+                )
 
+                bottom_y = int(y2)
 
-            # =========================
-            # CHECK DANGER ZONE
-            # =========================
+                point = (
+                    center_x,
+                    bottom_y
+                )
 
-            inside_zone = cv2.pointPolygonTest(
-                __import__("numpy").array(zone_points),
-                (center_x, center_y),
-                False
-            ) >= 0
+                inside = is_inside_danger_zone(
+                    point,
+                    polygon
+                )
 
+                if inside:
 
-            # =========================
-            # DIRECTION
-            # =========================
+                    danger_events += 1
 
-            direction = "STATIONARY"
+                    label = (
+                        f"ID {track_id} - DANGER"
+                    )
 
-            if len(history) >= 2:
-
-                old_x, old_y = history[0]
-                new_x, new_y = history[-1]
-
-                dx = new_x - old_x
-                dy = new_y - old_y
-
-                if (
-                    abs(dx) < MOVEMENT_THRESHOLD
-                    and abs(dy) < MOVEMENT_THRESHOLD
-                ):
-                    direction = "STATIONARY"
-
-                elif abs(dx) > abs(dy):
-
-                    direction = "RIGHT" if dx > 0 else "LEFT"
+                    cv2.putText(
+                        annotated_frame,
+                        label,
+                        (
+                            int(x1),
+                            int(y1) - 10
+                        ),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 0, 255),
+                        2
+                    )
 
                 else:
 
-                    direction = "DOWN" if dy > 0 else "UP"
+                    safe_events += 1
 
+        # ----------------------------------------------
+        # Write frame
+        # ----------------------------------------------
 
-            # =========================
-            # RISK LEVEL
-            # =========================
+        writer.write(
+            annotated_frame
+        )
 
-            if inside_zone:
+        if frame_number % 100 == 0:
 
-                risk = "HIGH RISK"
-
-            else:
-
-                risk = "SAFE"
-
-
-            # =========================
-            # DRAW OBJECT
-            # =========================
-
-            cv2.rectangle(
-                annotated_frame,
-                (x1, y1),
-                (x2, y2),
-                (0, 255, 0),
-                2
+            print(
+                f"Processing frame "
+                f"{frame_number}/{total_frames}..."
             )
 
-            cv2.circle(
-                annotated_frame,
-                (center_x, center_y),
-                5,
-                (0, 0, 255),
-                -1
-            )
+    cap.release()
+    writer.release()
 
-
-            # =========================
-            # MOTION TRAIL
-            # =========================
-
-            for i in range(1, len(history)):
-
-                cv2.line(
-                    annotated_frame,
-                    history[i - 1],
-                    history[i],
-                    (255, 0, 0),
-                    2
-                )
-
-
-            # =========================
-            # LABEL
-            # =========================
-
-            label = (
-                f"ID {track_id} | "
-                f"{direction} | "
-                f"{risk}"
-            )
-
-            cv2.putText(
-                annotated_frame,
-                label,
-                (x1, max(y1 - 10, 20)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (255, 255, 255),
-                2
-            )
-
-
-    # =========================
-    # ZONE LABEL
-    # =========================
-
-    cv2.putText(
-        annotated_frame,
-        "RAILWAY DANGER ZONE",
-        (30, height - 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2
+    print(
+        "\nDanger zone detection completed!"
     )
 
-
-    # =========================
-    # FRAME NUMBER
-    # =========================
-
-    cv2.putText(
-        annotated_frame,
-        f"Frame: {frame_number}",
-        (20, 35),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2
+    print(
+        f"Frames processed: {frame_number}"
     )
 
-
-    writer.write(annotated_frame)
-
-    cv2.imshow(
-        "PilotWatch - Railway Danger Zone",
-        annotated_frame
+    print(
+        f"Danger events: {danger_events}"
     )
 
+    print(
+        f"Safe events: {safe_events}"
+    )
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+    print(
+        f"\nOutput video: {output_video}"
+    )
+
+    return {
+        "frames_processed": frame_number,
+        "danger_events": danger_events,
+        "safe_events": safe_events,
+        "output_video": str(output_video)
+    }
 
 
-# =========================
-# CLEANUP
-# =========================
+# --------------------------------------------------
+# Direct execution
+# --------------------------------------------------
 
-cap.release()
-writer.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
 
+    INPUT_VIDEO = (
+        BASE_DIR
+        / "input"
+        / "videos"
+        / "railway_test.mp4"
+    )
 
-print("\nDanger-zone analysis completed!")
-
-print(f"Frames processed: {frame_number}")
-
-print(f"Output video: {OUTPUT_VIDEO}")
+    detect_danger_zone(
+        INPUT_VIDEO
+    )

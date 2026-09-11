@@ -1,699 +1,628 @@
 import cv2
+import json
 import math
 import numpy as np
-
-from ultralytics import YOLO
 from pathlib import Path
-from collections import defaultdict
+from ultralytics import YOLO
 
 from alert_manager import AlertManager
 
 
-# =========================
-# PATHS
-# =========================
-
-BASE_DIR = Path(__file__).parent
-
+BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / "models" / "yolo11n.pt"
-INPUT_VIDEO = BASE_DIR / "input" / "videos" / "railway_test.mp4"
 
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUTPUT_VIDEO = OUTPUT_DIR / "risk_assessment.mp4"
 
-
-# =========================
-# DANGER ZONE
-# =========================
-# Example coordinates.
-# These must be calibrated for the actual
-# railway camera later.
-
-DANGER_ZONE = np.array([
-    (150, 400),
-    (1130, 400),
-    (1270, 720),
-    (50, 720)
-], dtype=np.int32)
-
-
-# =========================
-# SETTINGS
-# =========================
-
-HISTORY_LENGTH = 10
-
-MOVEMENT_THRESHOLD = 5
-
-# Classes considered important
-# for railway intrusion detection.
-
-RISK_CLASSES = {
+# Objects relevant to PilotWatch
+RELEVANT_OBJECTS = {
     "person",
-    "animal",
-    "vehicle"
+    "train",
+    "car",
+    "truck",
+    "bus",
+    "motorcycle",
+    "bicycle",
+    "horse",
+    "cow",
+    "dog",
+    "cat",
+    "sheep",
+    "elephant",
 }
 
 
-# =========================
-# LOAD MODEL
-# =========================
+def calculate_direction(previous_position, current_position):
 
-print("Loading YOLO model...")
+    if previous_position is None:
+        return "UNKNOWN"
 
-model = YOLO(str(MODEL_PATH))
+    dx = current_position[0] - previous_position[0]
+    dy = current_position[1] - previous_position[1]
 
-print("YOLO model loaded successfully!")
-print("Starting risk assessment...\n")
+    distance = math.sqrt(dx ** 2 + dy ** 2)
+
+    if distance < 2:
+        return "STATIONARY"
+
+    if abs(dx) > abs(dy):
+        return "RIGHT" if dx > 0 else "LEFT"
+
+    return "TOWARDS" if dy > 0 else "AWAY"
 
 
-# =========================
-# ALERT MANAGER
-# =========================
+def calculate_speed(
+    previous_position,
+    current_position,
+    fps
+):
 
-alert_manager = AlertManager()
+    if previous_position is None:
+        return 0.0
+
+    dx = current_position[0] - previous_position[0]
+    dy = current_position[1] - previous_position[1]
+
+    distance = math.sqrt(dx ** 2 + dy ** 2)
+
+    return distance * fps
 
 
-# =========================
-# OPEN VIDEO
-# =========================
+def calculate_risk(
+    object_type,
+    inside_danger_zone,
+    direction,
+    speed
+):
 
-cap = cv2.VideoCapture(str(INPUT_VIDEO))
+    # Ignore irrelevant objects
+    if object_type not in RELEVANT_OBJECTS:
+        return "IGNORE"
 
-if not cap.isOpened():
-    raise RuntimeError(
-        f"Could not open video: {INPUT_VIDEO}"
+    # Outside danger zone
+    if not inside_danger_zone:
+        return "SAFE"
+
+    # Newly detected object
+    if direction == "UNKNOWN":
+        return "WARNING"
+
+    # Stationary object inside danger zone
+    if direction == "STATIONARY":
+        return "HIGH"
+
+    # Moving toward danger area
+    if direction == "TOWARDS":
+        return "CRITICAL"
+
+    # Fast movement inside danger zone
+    if speed > 100:
+        return "CRITICAL"
+
+    return "HIGH"
+
+
+def risk_assessment(
+    input_video,
+    output_video=None
+):
+
+    input_video = Path(input_video)
+
+    if output_video is None:
+        output_video = (
+            OUTPUT_DIR /
+            "risk_assessment.mp4"
+        )
+    else:
+        output_video = Path(output_video)
+
+    print("Loading YOLO model...")
+
+    model = YOLO(
+        str(MODEL_PATH)
     )
 
-
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-if fps <= 0:
-    fps = 25
-
-
-width = int(
-    cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-)
-
-height = int(
-    cap.get(cv2.CAP_PROP_FRAME_HEIGHT
-))
-
-
-# =========================
-# OUTPUT VIDEO
-# =========================
-
-fourcc = cv2.VideoWriter_fourcc(
-    *"mp4v"
-)
-
-writer = cv2.VideoWriter(
-    str(OUTPUT_VIDEO),
-    fourcc,
-    fps,
-    (width, height)
-)
-
-
-# =========================
-# POSITION HISTORY
-# =========================
-
-position_history = defaultdict(list)
-
-frame_number = 0
-
-
-# =========================
-# RISK COUNTERS
-# =========================
-
-risk_counts = {
-    "SAFE": 0,
-    "WARNING": 0,
-    "HIGH": 0,
-    "CRITICAL": 0
-}
-
-
-# =========================
-# MAIN LOOP
-# =========================
-
-while True:
-
-    success, frame = cap.read()
-
-    if not success:
-        break
-
-    frame_number += 1
-
-
-    # =========================
-    # YOLO + BYTETRACK
-    # =========================
-
-    results = model.track(
-        frame,
-        persist=True,
-        tracker="bytetrack.yaml",
-        verbose=False
+    print(
+        "YOLO model loaded successfully!"
     )
 
-    result = results[0]
-
-    annotated_frame = frame.copy()
-
-
-    # =========================
-    # DRAW DANGER ZONE
-    # =========================
-
-    overlay = annotated_frame.copy()
-
-    cv2.fillPoly(
-        overlay,
-        [DANGER_ZONE],
-        (0, 0, 255)
+    print(
+        "Starting improved risk assessment...\n"
     )
 
-    annotated_frame = cv2.addWeighted(
-        overlay,
-        0.15,
-        annotated_frame,
-        0.85,
-        0
+    cap = cv2.VideoCapture(
+        str(input_video)
     )
 
-    cv2.polylines(
-        annotated_frame,
-        [DANGER_ZONE],
-        True,
-        (0, 0, 255),
-        3
-    )
+    if not cap.isOpened():
 
-
-    # =========================
-    # PROCESS TRACKED OBJECTS
-    # =========================
-
-    if (
-        result.boxes is not None
-        and result.boxes.id is not None
-    ):
-
-        boxes = (
-            result.boxes.xyxy
-            .cpu()
-            .tolist()
+        raise RuntimeError(
+            f"Could not open video: {input_video}"
         )
 
-        track_ids = (
-            result.boxes.id
-            .int()
-            .cpu()
-            .tolist()
+    fps = cap.get(
+        cv2.CAP_PROP_FPS
+    )
+
+    if fps <= 0:
+        fps = 25
+
+    width = int(
+        cap.get(
+            cv2.CAP_PROP_FRAME_WIDTH
+        )
+    )
+
+    height = int(
+        cap.get(
+            cv2.CAP_PROP_FRAME_HEIGHT
+        )
+    )
+
+    total_frames = int(
+        cap.get(
+            cv2.CAP_PROP_FRAME_COUNT
+        )
+    )
+
+    fourcc = cv2.VideoWriter_fourcc(
+        *"mp4v"
+    )
+
+    writer = cv2.VideoWriter(
+        str(output_video),
+        fourcc,
+        fps,
+        (width, height)
+    )
+
+    # --------------------------------------------------
+    # Temporary danger zone
+    # --------------------------------------------------
+
+    danger_zone = [
+        (
+            int(width * 0.25),
+            int(height * 0.55)
+        ),
+        (
+            int(width * 0.75),
+            int(height * 0.55)
+        ),
+        (
+            int(width * 0.90),
+            int(height * 0.95)
+        ),
+        (
+            int(width * 0.10),
+            int(height * 0.95)
+        )
+    ]
+
+    polygon = np.array(
+        danger_zone,
+        dtype="int32"
+    )
+
+    # --------------------------------------------------
+    # Tracking
+    # --------------------------------------------------
+
+    previous_positions = {}
+
+    # Alert Manager
+    alert_manager = AlertManager(
+        persistence_frames=5,
+        disappearance_frames=30
+    )
+
+    # --------------------------------------------------
+    # Risk counters
+    # --------------------------------------------------
+
+    risk_counts = {
+        "SAFE": 0,
+        "WARNING": 0,
+        "HIGH": 0,
+        "CRITICAL": 0,
+        "IGNORE": 0
+    }
+
+    frame_number = 0
+
+    # --------------------------------------------------
+    # Main video loop
+    # --------------------------------------------------
+
+    while True:
+
+        success, frame = cap.read()
+
+        if not success:
+            break
+
+        frame_number += 1
+
+        # --------------------------------------------------
+        # YOLO + ByteTrack
+        # --------------------------------------------------
+
+        results = model.track(
+            frame,
+            persist=True,
+            tracker="bytetrack.yaml",
+            verbose=False
         )
 
-        class_ids = (
-            result.boxes.cls
-            .int()
-            .cpu()
-            .tolist()
+        result = results[0]
+
+        annotated_frame = result.plot()
+
+        # --------------------------------------------------
+        # Draw danger zone
+        # --------------------------------------------------
+
+        cv2.polylines(
+            annotated_frame,
+            [polygon],
+            True,
+            (0, 0, 255),
+            3
         )
 
-        confidences = (
-            result.boxes.conf
-            .cpu()
-            .tolist()
+        cv2.putText(
+            annotated_frame,
+            "DANGER ZONE",
+            (
+                int(width * 0.40),
+                int(height * 0.60)
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 255),
+            2
         )
 
+        # --------------------------------------------------
+        # Track visible objects
+        # --------------------------------------------------
 
-        for (
-            box,
-            track_id,
-            class_id,
-            confidence
-        ) in zip(
-            boxes,
-            track_ids,
-            class_ids,
-            confidences
+        visible_track_ids = set()
+
+        if (
+            result.boxes is not None
+            and result.boxes.id is not None
         ):
 
-            x1, y1, x2, y2 = map(
-                int,
-                box
+            track_ids = (
+                result.boxes.id
+                .int()
+                .cpu()
+                .tolist()
             )
 
-
-            # =========================
-            # OBJECT CENTER
-            # =========================
-
-            center_x = int(
-                (x1 + x2) / 2
+            visible_track_ids.update(
+                track_ids
             )
 
-            center_y = int(
-                (y1 + y2) / 2
+            boxes = (
+                result.boxes.xyxy
+                .cpu()
+                .tolist()
             )
 
+            class_ids = (
+                result.boxes.cls
+                .int()
+                .cpu()
+                .tolist()
+            )
 
-            # =========================
-            # CLASS NAME
-            # =========================
+            # --------------------------------------------------
+            # Process every tracked object
+            # --------------------------------------------------
 
-            class_name = model.names[
+            for (
+                track_id,
+                box,
                 class_id
-            ]
+            ) in zip(
+                track_ids,
+                boxes,
+                class_ids
+            ):
 
+                x1, y1, x2, y2 = box
 
-            # =========================
-            # POSITION HISTORY
-            # =========================
-
-            history = position_history[
-                track_id
-            ]
-
-            history.append(
-                (center_x, center_y)
-            )
-
-            if len(history) > HISTORY_LENGTH:
-
-                history.pop(0)
-
-
-            # =========================
-            # DIRECTION
-            # =========================
-
-            direction = "STATIONARY"
-
-            dx = 0
-            dy = 0
-
-
-            if len(history) >= 2:
-
-                old_x, old_y = history[0]
-
-                new_x, new_y = history[-1]
-
-                dx = new_x - old_x
-
-                dy = new_y - old_y
-
-
-                if (
-                    abs(dx) < MOVEMENT_THRESHOLD
-                    and
-                    abs(dy) < MOVEMENT_THRESHOLD
-                ):
-
-                    direction = "STATIONARY"
-
-
-                elif abs(dx) > abs(dy):
-
-                    if dx > 0:
-
-                        direction = "RIGHT"
-
-                    else:
-
-                        direction = "LEFT"
-
-
-                else:
-
-                    if dy > 0:
-
-                        direction = "DOWN"
-
-                    else:
-
-                        direction = "UP"
-
-
-            # =========================
-            # PIXEL SPEED
-            # =========================
-
-            speed = 0.0
-
-
-            if len(history) >= 2:
-
-                old_x, old_y = history[0]
-
-                new_x, new_y = history[-1]
-
-
-                distance = math.sqrt(
-                    (new_x - old_x) ** 2
-                    +
-                    (new_y - old_y) ** 2
+                # Bottom-center point
+                center_x = int(
+                    (x1 + x2) / 2
                 )
 
+                bottom_y = int(y2)
 
-                time_seconds = (
-                    len(history) - 1
-                ) / fps
-
-
-                if time_seconds > 0:
-
-                    speed = (
-                        distance /
-                        time_seconds
-                    )
-
-
-            # Remove tiny detection noise
-
-            if speed < 2:
-
-                speed = 0.0
-
-
-            # =========================
-            # DANGER ZONE CHECK
-            # =========================
-
-            inside_zone = (
-                cv2.pointPolygonTest(
-                    DANGER_ZONE,
-                    (center_x, center_y),
-                    False
-                ) >= 0
-            )
-
-
-            # =========================
-            # DISTANCE TO DANGER ZONE
-            # =========================
-
-            zone_distance = (
-                cv2.pointPolygonTest(
-                    DANGER_ZONE,
-                    (center_x, center_y),
-                    True
+                current_position = (
+                    center_x,
+                    bottom_y
                 )
-            )
 
-            distance_to_zone = abs(
-                zone_distance
-            )
-
-
-            # =========================
-            # RISK ASSESSMENT
-            # =========================
-
-            risk_level = "SAFE"
-
-
-            if class_name in RISK_CLASSES:
-
-                # -------------------------
-                # OBJECT INSIDE ZONE
-                # -------------------------
-
-                if inside_zone:
-
-                    if (
-                        direction != "STATIONARY"
-                        and speed > 10
-                    ):
-
-                        risk_level = "CRITICAL"
-
-                    else:
-
-                        risk_level = "HIGH"
-
-
-                # -------------------------
-                # OBJECT APPROACHING ZONE
-                # -------------------------
-
-                else:
-
-                    if (
-                        distance_to_zone < 100
-                        and
-                        direction != "STATIONARY"
-                    ):
-
-                        risk_level = "WARNING"
-
-                    else:
-
-                        risk_level = "SAFE"
-
-
-            # =========================
-            # UPDATE RISK COUNTER
-            # =========================
-
-            risk_counts[
-                risk_level
-            ] += 1
-
-
-            # =========================
-            # ALERT GENERATION
-            # =========================
-
-            if risk_level in {
-                "HIGH",
-                "CRITICAL"
-            }:
-
-                # ---------------------------------
-                # TRY TO CREATE NEW ALERT
-                # ---------------------------------
-
-                alert = (
-                    alert_manager.create_alert(
-                        track_id=track_id,
-                        object_type=class_name,
-                        direction=direction,
-                        speed=speed,
-                        risk_level=risk_level
+                previous_position = (
+                    previous_positions.get(
+                        track_id
                     )
                 )
 
+                # --------------------------------------------------
+                # Direction
+                # --------------------------------------------------
 
-                # ---------------------------------
-                # NEW ALERT
-                # ---------------------------------
+                direction = calculate_direction(
+                    previous_position,
+                    current_position
+                )
+
+                # --------------------------------------------------
+                # Speed
+                # --------------------------------------------------
+
+                speed = calculate_speed(
+                    previous_position,
+                    current_position,
+                    fps
+                )
+
+                previous_positions[
+                    track_id
+                ] = current_position
+
+                # --------------------------------------------------
+                # Danger zone
+                # --------------------------------------------------
+
+                inside = (
+                    cv2.pointPolygonTest(
+                        polygon,
+                        current_position,
+                        False
+                    ) >= 0
+                )
+
+                # --------------------------------------------------
+                # Object type
+                # --------------------------------------------------
+
+                object_type = model.names[
+                    class_id
+                ]
+
+                # --------------------------------------------------
+                # Risk
+                # --------------------------------------------------
+
+                risk = calculate_risk(
+                    object_type,
+                    inside,
+                    direction,
+                    speed
+                )
+
+                risk_counts[risk] += 1
+
+                # --------------------------------------------------
+                # Ignore irrelevant objects
+                # --------------------------------------------------
+
+                if risk == "IGNORE":
+
+                    cv2.putText(
+                        annotated_frame,
+                        (
+                            f"ID {track_id} | "
+                            f"{object_type} | IGNORE"
+                        ),
+                        (
+                            int(x1),
+                            int(y1) - 10
+                        ),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        2
+                    )
+
+                    continue
+
+                # --------------------------------------------------
+                # Persistent Alert Manager
+                # --------------------------------------------------
+
+                alert = alert_manager.observe(
+                    track_id=track_id,
+                    object_type=object_type,
+                    direction=direction,
+                    speed=speed,
+                    risk_level=risk,
+                    inside_danger_zone=inside
+                )
+
+                # --------------------------------------------------
+                # Print alert event
+                # --------------------------------------------------
 
                 if alert:
 
                     print(
-                        f"ALERT: {risk_level} | "
-                        f"ID {track_id} | "
-                        f"{class_name} | "
-                        f"{direction} | "
-                        f"{speed:.2f} px/s"
+                        f"ALERT EVENT: "
+                        f"{alert['status']} | "
+                        f"{alert['risk_level']} | "
+                        f"ID {alert['track_id']} | "
+                        f"{alert['object_type']} | "
+                        f"{alert['direction']} | "
+                        f"{alert['speed_pixels_per_second']:.2f} px/s"
                     )
 
+                # --------------------------------------------------
+                # Display information
+                # --------------------------------------------------
 
-                # ---------------------------------
-                # EXISTING ALERT
-                # CHECK FOR ESCALATION
-                # ---------------------------------
+                label = (
+                    f"ID {track_id} | "
+                    f"{object_type} | "
+                    f"{direction} | "
+                    f"{risk}"
+                )
 
-                else:
+                text_color = (
+                    (0, 0, 255)
+                    if risk in [
+                        "HIGH",
+                        "CRITICAL"
+                    ]
+                    else (0, 255, 0)
+                )
 
-                    escalation = (
-                        alert_manager.update_alert(
-                            track_id=track_id,
-                            direction=direction,
-                            speed=speed,
-                            risk_level=risk_level
-                        )
-                    )
-
-
-                    if escalation:
-
-                        print(
-                            f"ALERT ESCALATED: "
-                            f"CRITICAL | "
-                            f"ID {track_id} | "
-                            f"{class_name} | "
-                            f"{direction} | "
-                            f"{speed:.2f} px/s"
-                        )
-
-
-            # =========================
-            # DRAW OBJECT BOX
-            # =========================
-
-            cv2.rectangle(
-                annotated_frame,
-                (x1, y1),
-                (x2, y2),
-                (0, 255, 0),
-                2
-            )
-
-
-            # =========================
-            # DRAW CENTER
-            # =========================
-
-            cv2.circle(
-                annotated_frame,
-                (center_x, center_y),
-                5,
-                (0, 0, 255),
-                -1
-            )
-
-
-            # =========================
-            # MOTION TRAIL
-            # =========================
-
-            for i in range(
-                1,
-                len(history)
-            ):
-
-                cv2.line(
+                cv2.putText(
                     annotated_frame,
-                    history[i - 1],
-                    history[i],
-                    (255, 0, 0),
+                    label,
+                    (
+                        int(x1),
+                        int(y1) - 10
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    text_color,
                     2
                 )
 
+        # --------------------------------------------------
+        # Resolve disappeared objects
+        # --------------------------------------------------
 
-            # =========================
-            # OBJECT LABEL
-            # =========================
+        resolved_alerts = (
+            alert_manager.handle_missing_tracks(
+                visible_track_ids
+            )
+        )
 
-            label = (
-                f"ID {track_id} | "
-                f"{class_name} | "
-                f"{direction} | "
-                f"{risk_level}"
+        for alert in resolved_alerts:
+
+            print(
+                f"ALERT RESOLVED | "
+                f"ID {alert['track_id']} | "
+                f"{alert['object_type']}"
             )
 
+        # --------------------------------------------------
+        # Write output
+        # --------------------------------------------------
 
-            cv2.putText(
-                annotated_frame,
-                label,
-                (
-                    x1,
-                    max(
-                        y1 - 10,
-                        20
-                    )
-                ),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.48,
-                (255, 255, 255),
-                2
+        writer.write(
+            annotated_frame
+        )
+
+        if frame_number % 100 == 0:
+
+            print(
+                f"Processing frame "
+                f"{frame_number}/{total_frames}..."
             )
 
+    # --------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------
 
-    # =========================
-    # SYSTEM INFORMATION
-    # =========================
+    cap.release()
+    writer.release()
 
-    cv2.putText(
-        annotated_frame,
-        "PILOTWATCH - RISK ASSESSMENT",
-        (20, 35),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.75,
-        (255, 255, 255),
-        2
+    # --------------------------------------------------
+    # Final summary
+    # --------------------------------------------------
+
+    summary = {
+
+        "frames_processed":
+            frame_number,
+
+        "risk_counts":
+            risk_counts,
+
+        "active_alerts":
+            alert_manager.get_active_alerts(),
+
+        "alert_history":
+            alert_manager.get_alert_history()
+    }
+
+    summary_file = (
+        OUTPUT_DIR /
+        "risk_summary.json"
     )
 
+    with open(
+        summary_file,
+        "w",
+        encoding="utf-8"
+    ) as file:
 
-    cv2.putText(
-        annotated_frame,
-        "RAILWAY DANGER ZONE",
-        (30, height - 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.75,
-        (255, 255, 255),
-        2
-    )
-
-
-    # =========================
-    # WRITE OUTPUT
-    # =========================
-
-    writer.write(
-        annotated_frame
-    )
-
-
-    cv2.imshow(
-        "PilotWatch - Risk Assessment",
-        annotated_frame
-    )
-
-
-    # Press Q to stop
-
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-
-        break
-
-
-# =========================
-# CLEANUP
-# =========================
-
-cap.release()
-
-writer.release()
-
-cv2.destroyAllWindows()
-
-
-# =========================
-# FINAL RESULT
-# =========================
-
-print(
-    "\nRisk assessment completed!"
-)
-
-print(
-    f"Frames processed: "
-    f"{frame_number}"
-)
-
-
-print("\nRisk event counts:")
-
-for risk, count in risk_counts.items():
+        json.dump(
+            summary,
+            file,
+            indent=4
+        )
 
     print(
-        f"{risk}: {count}"
+        "\nImproved risk assessment completed!"
     )
 
+    print(
+        f"Frames processed: "
+        f"{frame_number}"
+    )
 
-print(
-    f"\nOutput video: "
-    f"{OUTPUT_VIDEO}"
-)
+    print(
+        "\nRisk event counts:"
+    )
+
+    for risk, count in risk_counts.items():
+
+        print(
+            f"{risk}: {count}"
+        )
+
+    print(
+        f"\nOutput video: "
+        f"{output_video}"
+    )
+
+    print(
+        f"Risk summary: "
+        f"{summary_file}"
+    )
+
+    print(
+        f"Active alerts: "
+        f"{len(alert_manager.get_active_alerts())}"
+    )
+
+    print(
+        f"Alert history: "
+        f"{len(alert_manager.get_alert_history())}"
+    )
+
+    return summary
+
+
+if __name__ == "__main__":
+
+    INPUT_VIDEO = (
+        BASE_DIR
+        / "input"
+        / "videos"
+        / "railway_test.mp4"
+    )
+
+    risk_assessment(
+        INPUT_VIDEO
+    )

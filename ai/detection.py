@@ -2,9 +2,12 @@ from ultralytics import YOLO
 import cv2
 import os
 
-MODEL_PATH = "yolo11n.pt"
+from pathlib import Path
 
-model = YOLO(MODEL_PATH)
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "models" / "yolo11n.pt"
+
+model = YOLO(str(MODEL_PATH))
 
 
 def detect_image(image_path):
