@@ -21,8 +21,15 @@ export default function DatasetTesting() {
             return;
         }
 
-        if (!selectedFile.name.toLowerCase().endsWith(".zip")) {
-            setError("Please select a ZIP dataset file.");
+        if (
+            !selectedFile.name
+                .toLowerCase()
+                .endsWith(".zip")
+        ) {
+            setError(
+                "Please select a ZIP dataset file."
+            );
+
             setFile(null);
             return;
         }
@@ -34,7 +41,9 @@ export default function DatasetTesting() {
     const uploadDataset = async () => {
 
         if (!file) {
-            setError("Please select a dataset ZIP file.");
+            setError(
+                "Please select a dataset ZIP file."
+            );
             return;
         }
 
@@ -44,7 +53,10 @@ export default function DatasetTesting() {
 
         const formData = new FormData();
 
-        formData.append("file", file);
+        formData.append(
+            "file",
+            file
+        );
 
         try {
 
@@ -60,7 +72,8 @@ export default function DatasetTesting() {
 
             if (!response.ok) {
                 throw new Error(
-                    data.detail || "Dataset upload failed"
+                    data.detail ||
+                    "Dataset upload failed"
                 );
             }
 
@@ -68,314 +81,439 @@ export default function DatasetTesting() {
 
         } catch (err) {
 
-            setError(err.message);
+            setError(
+                err.message
+            );
 
         } finally {
 
             setUploading(false);
-
         }
+    };
+
+
+    const formatSize = (bytes) => {
+
+        if (!bytes) return "--";
+
+        const mb =
+            Number(bytes) /
+            (1024 * 1024);
+
+        return `${mb.toFixed(2)} MB`;
     };
 
 
     return (
         <div
             style={{
-                minHeight: "100vh",
-                padding: "40px",
-                background: "#f4f7fb",
-                fontFamily: "Arial, sans-serif"
+                padding: "30px",
+                maxWidth: "1100px",
+                margin: "auto"
             }}
         >
 
+            <h1>
+                Dataset Testing
+            </h1>
+
+            <p>
+                Upload and validate a YOLO
+                dataset before model training.
+            </p>
+
+
+            {/* Upload Section */}
+
             <div
                 style={{
-                    maxWidth: "900px",
-                    margin: "0 auto"
+                    marginTop: "25px",
+                    padding: "25px",
+                    border: "1px solid #ddd",
+                    borderRadius: "12px"
                 }}
             >
 
-                <h1
+                <h2>
+                    Upload Dataset
+                </h2>
+
+                <input
+                    type="file"
+                    accept=".zip"
+                    onChange={handleFileChange}
+                />
+
+                {file && (
+                    <p>
+                        Selected:
+                        <strong>
+                            {" "}{file.name}
+                        </strong>
+                    </p>
+                )}
+
+                <button
+                    onClick={uploadDataset}
+                    disabled={
+                        !file ||
+                        uploading
+                    }
                     style={{
-                        marginBottom: "8px",
-                        color: "#172033"
+                        marginTop: "15px",
+                        padding: "10px 20px",
+                        cursor:
+                            !file || uploading
+                                ? "not-allowed"
+                                : "pointer"
                     }}
                 >
-                    Dataset Testing
-                </h1>
+                    {uploading
+                        ? "Uploading & Validating..."
+                        : "Validate Dataset"}
+                </button>
 
-                <p
-                    style={{
-                        color: "#64748b",
-                        marginBottom: "30px"
-                    }}
-                >
-                    Upload a YOLO-compatible railway dataset for
-                    validation and model training.
-                </p>
+            </div>
 
 
-                {/* Upload Card */}
+            {/* Error */}
 
+            {error && (
                 <div
                     style={{
-                        background: "#ffffff",
-                        padding: "30px",
-                        borderRadius: "14px",
-                        border: "1px solid #e2e8f0",
-                        marginBottom: "25px"
+                        marginTop: "20px",
+                        padding: "15px",
+                        background: "#ffe5e5",
+                        borderRadius: "8px"
+                    }}
+                >
+                    ❌ {error}
+                </div>
+            )}
+
+
+            {/* Result */}
+
+            {result && (
+                <div
+                    style={{
+                        marginTop: "30px"
                     }}
                 >
 
-                    <h2
-                        style={{
-                            marginTop: 0,
-                            color: "#1e293b"
-                        }}
-                    >
-                        Upload Dataset
+                    <h2>
+                        Dataset Information
                     </h2>
 
-                    <p
+
+                    <div
                         style={{
-                            color: "#64748b"
+                            display: "grid",
+                            gridTemplateColumns:
+                                "repeat(auto-fit, minmax(180px, 1fr))",
+                            gap: "15px"
                         }}
                     >
-                        Select your complete dataset as a ZIP file.
-                    </p>
+
+                        <InfoCard
+                            title="Images"
+                            value={result.images}
+                        />
+
+                        <InfoCard
+                            title="Labels"
+                            value={result.labels}
+                        />
+
+                        <InfoCard
+                            title="ZIP Size"
+                            value={formatSize(result.size)}
+                        />
+
+                        <InfoCard
+                            title="Structure"
+                            value={
+                                result.dataset_structure
+                            }
+                        />
+
+                    </div>
 
 
-                    <input
-                        type="file"
-                        accept=".zip"
-                        onChange={handleFileChange}
-                    />
+                    {/* Dataset validation */}
+
+                    <div
+                        style={{
+                            marginTop: "25px",
+                            padding: "25px",
+                            border: "1px solid #ddd",
+                            borderRadius: "12px"
+                        }}
+                    >
+
+                        <h2>
+                            Dataset Validation
+                        </h2>
+
+                        <ValidationRow
+                            name="data.yaml"
+                            passed={
+                                result.validation
+                                    ?.data_yaml_found
+                            }
+                        />
+
+                        <ValidationRow
+                            name="Images"
+                            passed={
+                                result.validation
+                                    ?.images_found
+                            }
+                        />
+
+                        <ValidationRow
+                            name="Labels"
+                            passed={
+                                result.validation
+                                    ?.labels_found
+                            }
+                        />
+
+                        <ValidationRow
+                            name="Train split"
+                            passed={
+                                result.validation
+                                    ?.train_found
+                            }
+                        />
+
+                        <ValidationRow
+                            name="Validation split"
+                            passed={
+                                result.validation
+                                    ?.validation_found
+                            }
+                        />
+
+                        <ValidationRow
+                            name="Test split"
+                            passed={
+                                result.validation
+                                    ?.test_found
+                            }
+                        />
+
+                        <ValidationRow
+                            name="Image ↔ Label matching"
+                            passed={
+                                result.validation
+                                    ?.image_label_match
+                            }
+                        />
+
+                    </div>
 
 
-                    {file && (
-                        <div
-                            style={{
-                                marginTop: "20px",
-                                padding: "15px",
-                                background: "#f1f5f9",
-                                borderRadius: "8px"
-                            }}
-                        >
-                            <strong>Selected Dataset:</strong>
+                    {/* Problems */}
 
-                            <div>
-                                {file.name}
-                            </div>
+                    {(result.missing_label_count > 0 ||
+                        result.unmatched_label_count > 0) && (
 
                             <div
                                 style={{
-                                    color: "#64748b",
-                                    fontSize: "14px",
-                                    marginTop: "5px"
+                                    marginTop: "25px",
+                                    padding: "20px",
+                                    border:
+                                        "1px solid #f0ad4e",
+                                    borderRadius: "12px"
                                 }}
                             >
-                                Size:{" "}
-                                {(file.size / (1024 * 1024)).toFixed(2)}
-                                {" "}MB
+
+                                <h2>
+                                    ⚠ Dataset Issues
+                                </h2>
+
+                                <p>
+                                    Missing labels:
+                                    <strong>
+                                        {" "}
+                                        {
+                                            result.missing_label_count
+                                        }
+                                    </strong>
+                                </p>
+
+                                <p>
+                                    Unmatched labels:
+                                    <strong>
+                                        {" "}
+                                        {
+                                            result.unmatched_label_count
+                                        }
+                                    </strong>
+                                </p>
+
+                                {result.unmatched_labels?.length > 0 && (
+                                    <div>
+                                        <strong>
+                                            Example unmatched labels:
+                                        </strong>
+
+                                        <ul>
+                                            {result.unmatched_labels
+                                                .slice(0, 10)
+                                                .map(
+                                                    (item, index) => (
+                                                        <li
+                                                            key={index}
+                                                        >
+                                                            {item}
+                                                        </li>
+                                                    )
+                                                )}
+                                        </ul>
+                                    </div>
+                                )}
+
                             </div>
-                        </div>
-                    )}
+                        )}
 
 
-                    <button
-                        onClick={uploadDataset}
-                        disabled={!file || uploading}
+                    {/* Final status */}
+
+                    <div
                         style={{
-                            marginTop: "20px",
-                            padding: "12px 24px",
-                            border: "none",
-                            borderRadius: "8px",
-                            background:
-                                !file || uploading
-                                    ? "#94a3b8"
-                                    : "#1d4ed8",
-                            color: "#ffffff",
-                            cursor:
-                                !file || uploading
-                                    ? "not-allowed"
-                                    : "pointer",
-                            fontSize: "15px",
-                            fontWeight: "600"
+                            marginTop: "25px",
+                            padding: "25px",
+                            borderRadius: "12px",
+                            border: "2px solid",
+                            borderColor:
+                                result.ready_for_training
+                                    ? "green"
+                                    : "red"
                         }}
                     >
-                        {uploading
-                            ? "Uploading Dataset..."
-                            : "Upload Dataset"}
-                    </button>
+
+                        <h2>
+                            {result.ready_for_training
+                                ? "🟢 Dataset READY for Training"
+                                : "🔴 Dataset NOT Ready for Training"}
+                        </h2>
+
+                        <p>
+                            {result.ready_for_training
+                                ? "All required YOLO dataset components are valid."
+                                : "Fix the dataset issues before starting training."}
+                        </p>
 
 
-                    {error && (
+                        {result.ready_for_training && (
+                            <button
+                                style={{
+                                    marginTop: "10px",
+                                    padding:
+                                        "12px 25px",
+                                    cursor: "pointer"
+                                }}
+                            >
+                                Train YOLO Model
+                            </button>
+                        )}
+
+                    </div>
+
+
+                    {/* Drive */}
+
+                    {result.drive_link && (
                         <div
                             style={{
-                                marginTop: "20px",
-                                padding: "12px",
-                                borderRadius: "8px",
-                                background: "#fee2e2",
-                                color: "#b91c1c"
+                                marginTop: "20px"
                             }}
                         >
-                            {error}
+
+                            <a
+                                href={
+                                    result.drive_link
+                                }
+                                target="_blank"
+                                rel="noreferrer"
+                            >
+                                Open Dataset in Google Drive
+                            </a>
+
                         </div>
                     )}
 
                 </div>
-
-
-                {/* Result */}
-
-                {result && (
-
-                    <div
-                        style={{
-                            background: "#ffffff",
-                            padding: "30px",
-                            borderRadius: "14px",
-                            border: "1px solid #e2e8f0"
-                        }}
-                    >
-
-                        <h2
-                            style={{
-                                marginTop: 0,
-                                color: "#1e293b"
-                            }}
-                        >
-                            Dataset Information
-                        </h2>
-
-
-                        <div
-                            style={{
-                                display: "grid",
-                                gridTemplateColumns:
-                                    "repeat(auto-fit, minmax(180px, 1fr))",
-                                gap: "15px"
-                            }}
-                        >
-
-                            <InfoCard
-                                title="Images"
-                                value={result.images}
-                            />
-
-                            <InfoCard
-                                title="Labels"
-                                value={result.labels}
-                            />
-
-                            <InfoCard
-                                title="Train"
-                                value={
-                                    result.train_available
-                                        ? "Available"
-                                        : "Missing"
-                                }
-                            />
-
-                            <InfoCard
-                                title="Validation"
-                                value={
-                                    result.validation_available
-                                        ? "Available"
-                                        : "Missing"
-                                }
-                            />
-
-                            <InfoCard
-                                title="Test"
-                                value={
-                                    result.test_available
-                                        ? "Available"
-                                        : "Missing"
-                                }
-
-                            />
-
-                        </div>
-
-
-                        <div
-                            style={{
-                                marginTop: "25px",
-                                padding: "18px",
-                                borderRadius: "10px",
-                                background:
-                                    result.ready_for_training
-                                        ? "#dcfce7"
-                                        : "#fef3c7",
-                                color:
-                                    result.ready_for_training
-                                        ? "#166534"
-                                        : "#92400e"
-                            }}
-                        >
-
-                            <strong>
-                                {result.ready_for_training
-                                    ? "✓ Dataset Ready for Training"
-                                    : "⚠ Dataset Requires Validation"}
-                            </strong>
-
-                            <p
-                                style={{
-                                    marginBottom: 0
-                                }}
-                            >
-                                {result.data_yaml
-                                    ? `Configuration file: ${result.data_yaml}`
-                                    : "data.yaml was not found."}
-                            </p>
-
-                        </div>
-
-                    </div>
-
-                )}
-
-            </div>
+            )}
 
         </div>
     );
 }
 
 
-function InfoCard({ title, value }) {
+/* -------------------------------- */
+/* Info Card */
+/* -------------------------------- */
+
+function InfoCard({
+    title,
+    value
+}) {
 
     return (
-
         <div
             style={{
-                padding: "18px",
-                background: "#f8fafc",
-                borderRadius: "10px",
-                border: "1px solid #e2e8f0"
+                padding: "20px",
+                border: "1px solid #ddd",
+                borderRadius: "10px"
             }}
         >
 
-            <div
-                style={{
-                    fontSize: "13px",
-                    color: "#64748b",
-                    marginBottom: "7px"
-                }}
-            >
+            <div>
                 {title}
             </div>
 
-            <div
-                style={{
-                    fontSize: "20px",
-                    fontWeight: "700",
-                    color: "#0f172a"
-                }}
-            >
+            <h2>
                 {value}
-            </div>
+            </h2>
+
+        </div>
+    );
+}
+
+
+/* -------------------------------- */
+/* Validation Row */
+/* -------------------------------- */
+
+function ValidationRow({
+    name,
+    passed
+}) {
+
+    return (
+        <div
+            style={{
+                display: "flex",
+                justifyContent:
+                    "space-between",
+                padding: "10px 0",
+                borderBottom:
+                    "1px solid #eee"
+            }}
+        >
+
+            <span>
+                {name}
+            </span>
+
+            <strong>
+                {passed
+                    ? "✓ PASS"
+                    : "✗ FAIL"}
+            </strong>
 
         </div>
     );

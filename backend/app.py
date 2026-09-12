@@ -9,6 +9,7 @@ from database import models, crud
 from routers import auth, loco, checkpost
 import sys
 from pathlib import Path
+from routers.trainingR import router as training_router
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -54,6 +55,7 @@ app.include_router(loco.router)
 app.include_router(checkpost.router)
 app.include_router(dataset_router)
 app.include_router(ai_router)
+app.include_router(training_router)
 
 
 @app.get("/")

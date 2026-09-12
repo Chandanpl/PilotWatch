@@ -2,8 +2,11 @@ from pathlib import Path
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
+
+# =========================================================
+# Google Drive OAuth settings
+# =========================================================
 
 SCOPES = [
     "https://www.googleapis.com/auth/drive.file"
@@ -11,14 +14,33 @@ SCOPES = [
 
 BASE_DIR = Path(__file__).resolve().parent
 
-CLIENT_SECRET_FILE = BASE_DIR / "credentials" / "client_secret.json"
-TOKEN_FILE = BASE_DIR / "credentials" / "token.json"
+CLIENT_SECRET_FILE = (
+    BASE_DIR
+    / "credentials"
+    / "client_secret.json"
+)
 
+TOKEN_FILE = (
+    BASE_DIR
+    / "credentials"
+    / "token.json"
+)
+
+
+# =========================================================
+# Get Google Drive service
+# =========================================================
 
 def get_drive_service():
+
     credentials = None
 
+    # -----------------------------------------------------
+    # Load existing OAuth token
+    # -----------------------------------------------------
+
     if TOKEN_FILE.exists():
+
         from google.oauth2.credentials import Credentials
 
         credentials = Credentials.from_authorized_user_file(
@@ -26,20 +48,33 @@ def get_drive_service():
             SCOPES
         )
 
+    # -----------------------------------------------------
+    # Authenticate if required
+    # -----------------------------------------------------
+
     if not credentials or not credentials.valid:
+
         flow = InstalledAppFlow.from_client_secrets_file(
             str(CLIENT_SECRET_FILE),
             SCOPES
         )
 
+        # IMPORTANT:
+        # FastAPI uses port 8000.
+        # Google OAuth uses port 8001.
         credentials = flow.run_local_server(
-            port=8000
+            port=8001
         )
 
+        # Save token
         TOKEN_FILE.write_text(
             credentials.to_json(),
             encoding="utf-8"
         )
+
+    # -----------------------------------------------------
+    # Build Drive API service
+    # -----------------------------------------------------
 
     service = build(
         "drive",
@@ -50,54 +85,87 @@ def get_drive_service():
     return service
 
 
-def create_folder(service, folder_name, parent_id=None):
-    """Create a folder in Google Drive."""
+# =========================================================
+# Create Google Drive folder
+# =========================================================
+
+def create_folder(
+    service,
+    folder_name,
+    parent_id=None
+):
 
     metadata = {
         "name": folder_name,
-        "mimeType": "application/vnd.google-apps.folder"
+        "mimeType":
+            "application/vnd.google-apps.folder"
     }
 
     if parent_id:
-        metadata["parents"] = [parent_id]
+
+        metadata["parents"] = [
+            parent_id
+        ]
 
     folder = service.files().create(
         body=metadata,
-        fields="id, name"
+        fields="id,name"
     ).execute()
 
     return folder["id"]
 
 
-def find_folder(service, folder_name, parent_id=None):
-    """Find an existing folder."""
+# =========================================================
+# Find Google Drive folder
+# =========================================================
+
+def find_folder(
+    service,
+    folder_name,
+    parent_id=None
+):
 
     query = (
         f"name = '{folder_name}' "
-        f"and mimeType = 'application/vnd.google-apps.folder' "
+        f"and mimeType = "
+        f"'application/vnd.google-apps.folder' "
         f"and trashed = false"
     )
 
     if parent_id:
-        query += f" and '{parent_id}' in parents"
+
+        query += (
+            f" and '{parent_id}' in parents"
+        )
 
     results = service.files().list(
         q=query,
         spaces="drive",
-        fields="files(id, name)",
+        fields="files(id,name)",
         pageSize=10
     ).execute()
 
-    folders = results.get("files", [])
+    folders = results.get(
+        "files",
+        []
+    )
 
     if folders:
+
         return folders[0]["id"]
 
     return None
 
 
-def get_or_create_folder(service, folder_name, parent_id=None):
-    """Return existing folder or create it."""
+# =========================================================
+# Get existing folder or create it
+# =========================================================
+
+def get_or_create_folder(
+    service,
+    folder_name,
+    parent_id=None
+):
 
     folder_id = find_folder(
         service,
@@ -106,6 +174,7 @@ def get_or_create_folder(service, folder_name, parent_id=None):
     )
 
     if folder_id:
+
         return folder_id
 
     return create_folder(
@@ -115,30 +184,46 @@ def get_or_create_folder(service, folder_name, parent_id=None):
     )
 
 
+# =========================================================
+# Setup PilotWatch Drive folders
+# =========================================================
+
 def setup_pilotwatch_folders():
-    """Create PilotWatch Dataset folder structure."""
 
     service = get_drive_service()
 
-    # Main PilotWatch folder
+    # -----------------------------------------------------
+    # PilotWatch
+    # -----------------------------------------------------
+
     pilotwatch_id = get_or_create_folder(
         service,
         "PilotWatch"
     )
 
-    # Dataset folder
+    # -----------------------------------------------------
+    # Dataset
+    # -----------------------------------------------------
+
     dataset_id = get_or_create_folder(
         service,
         "Dataset",
         pilotwatch_id
     )
 
-    # Dataset subfolders
+    # -----------------------------------------------------
+    # Videos
+    # -----------------------------------------------------
+
     videos_id = get_or_create_folder(
         service,
         "Videos",
         dataset_id
     )
+
+    # -----------------------------------------------------
+    # Images
+    # -----------------------------------------------------
 
     images_id = get_or_create_folder(
         service,
@@ -146,11 +231,19 @@ def setup_pilotwatch_folders():
         dataset_id
     )
 
+    # -----------------------------------------------------
+    # Datasets
+    # -----------------------------------------------------
+
     datasets_id = get_or_create_folder(
         service,
         "Datasets",
         dataset_id
     )
+
+    # -----------------------------------------------------
+    # Other
+    # -----------------------------------------------------
 
     other_id = get_or_create_folder(
         service,
@@ -159,10 +252,22 @@ def setup_pilotwatch_folders():
     )
 
     return {
-        "pilotwatch": pilotwatch_id,
-        "dataset": dataset_id,
-        "videos": videos_id,
-        "images": images_id,
-        "datasets": datasets_id,
-        "other": other_id
+
+        "pilotwatch":
+            pilotwatch_id,
+
+        "dataset":
+            dataset_id,
+
+        "videos":
+            videos_id,
+
+        "images":
+            images_id,
+
+        "datasets":
+            datasets_id,
+
+        "other":
+            other_id
     }
